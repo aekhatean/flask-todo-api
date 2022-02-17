@@ -1,4 +1,3 @@
-from crypt import methods
 from flask import Flask, jsonify, request
 from flask_jwt_extended import (
     JWTManager,
@@ -40,8 +39,19 @@ db = SQLAlchemy(app)
 
 
 # Models
+class User(db.Model):
+    __tablename__ = 'user'
+    username = db.Column(db.String, primary_key=True, nullable=False)
+    password = db.Column(db.String)
+    
+    tasks = db.relationship('Task', backref='user_table')
+
+    def __repr__(self):
+        return f'User("{self.username}")'
+
+
 class Task(db.Model):
-    __tablename__ = 'tasks'
+    __tablename__ = 'task'
     id = db.Column(db.Integer, primary_key=True)
     title = db.Column(db.String, unique=True, nullable=False)
     desc = db.Column(db.String)
@@ -49,16 +59,12 @@ class Task(db.Model):
     status = db.Column(db.Boolean)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+    user_username = db.Column(db.String, db.ForeignKey('user.username'))
+    user = db.relationship("User", back_populates="tasks")
+
     def __repr__(self):
         return f'Task("{self.title}": "{self.due}")'
 
-
-class User(db.Model):
-    __tablename__ = 'users'
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String, unique=True, nullable=False)
-    password = db.Column(db.String)
-  
 
 # Utils
 def dictify(task):
@@ -75,10 +81,12 @@ def dictify(task):
 def auth(username):
     # Return newly created user's token
     access_token = create_access_token(identity=username)
+    refresh_token = create_refresh_token(identity=username)
     return jsonify({
         'status': 'Authenticated',
         'data': {
             'access_token': access_token,
+            'refreash_token': refresh_token,
         }
     })
 
@@ -87,8 +95,9 @@ def auth(username):
 @app.route('/', methods=['GET', 'POST'])
 @jwt_required()
 def todo_list():
+    username = get_jwt_identity()
     if request.method == 'GET':
-        tasks = Task.query.all()
+        tasks = Task.query.filter_by(user_username=username)
         results = []
         for task in tasks:
             dict = dictify(task)
@@ -107,7 +116,7 @@ def todo_list():
 
         try:
             # Create record in database
-            task = Task(title=track_title, desc=track_desc, due=track_time, status=task_status)
+            task = Task(title=track_title, desc=track_desc, due=track_time, status=task_status, user_username=username)
             db.session.add(task)
             db.session.commit()
 
@@ -123,7 +132,8 @@ def todo_list():
 @app.route("/<int:id>", methods=['GET', 'DELETE', 'PUT'])
 @jwt_required()
 def todo_task(id):
-    task = Task.query.filter_by(id=id).first()
+    username = get_jwt_identity()
+    task = Task.query.filter_by(id=id, owner=username).first()
     if request.method == 'GET':
         dict = dictify(task)
         return jsonify({
